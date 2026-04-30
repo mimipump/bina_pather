@@ -25,18 +25,27 @@ sumD=0
 this_node=knowed_node
 uppath=0
 g=0
+m=""
+
 for(i=0;i>=max;i++)
 {
-    uppath第g位+this_node["number"]
-    if(-(d<0)==this_number["number"])
-    {
-        sumD=sumD+2^g
-    }
+    sumD=sumD+(-(-(d<0)==this_number["number"])&2^i);
+    
     if(abs(sumD)>=abs(d))
     {
         g=i;
+        uppath=uppath的第g位+this_node["number"];
         break;
     }
+    
+    if(this["up"]==null)
+    {
+        //跳出\反馈or建立一个同方向上级
+    }
+    else
+    {
+        this_node=&this_node["up"];
+    }  
 }
 共顶为g+1;
 uppath的0到g位的倒序与d按位或,得到从共顶访问到目标的地图
