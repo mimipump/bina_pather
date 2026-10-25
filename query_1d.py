@@ -61,7 +61,7 @@ def query(store: Store1D, knowed_node_id: ID, d: int) -> Dict[str, Any]:
                 this_node.up = parent.nid
                 store.put_node(this_node)
             parent_node = parent
-        else:
+        else:# 有上级，直接上爬
             parent_node = store.get_node(this_node.up)
             if parent_node is None:
                 raise ValueError(f"父节点 {this_node.up:#x} 不存在")
@@ -78,11 +78,9 @@ def query(store: Store1D, knowed_node_id: ID, d: int) -> Dict[str, Any]:
         if abs(sumD) >= abs(d):
             g = i
             break
-
         # --- 上爬到父节点 ---
         this_node_id = parent_node.nid
         this_node = parent_node
-
     # 循环结束
     if g < 0:
         return {
@@ -110,25 +108,41 @@ def query(store: Store1D, knowed_node_id: ID, d: int) -> Dict[str, Any]:
             cur_node = store.get_leaf(cur_id)
             if cur_node is None:
                 raise ValueError(f"下行时节点 {cur_id:#x} 不存在")
+
+        # 下行过程中遇到叶子但还未到达目标层，说明树结构不完整
+        if isinstance(cur_node, Leaf) and bit_pos > 0:
+            raise ValueError(
+                f"下行时遇到叶子节点 {cur_id:#x}，但还未到达第 {bit_pos} 层，"
+                "树结构不完整"
+            )
+
         if bit == 0:
             nxt = cur_node.d0 if isinstance(cur_node, Node) else None
         else:
             nxt = cur_node.d1 if isinstance(cur_node, Node) else None
+
         if nxt is None:
-            # 目标口为空：在该处建立新的叶子节点作为目标（向左/右扩展）
-            new_leaf_node = new_leaf(up=cur_id, data=None)
-            store.put_leaf(new_leaf_node)
-            if isinstance(cur_node, Node):
+            # 目标口为空：在该处建立新节点
+            if bit_pos == 0:
+                # 到达叶子层：建立新的空叶子作为目标
+                new_leaf_node = new_leaf(up=cur_id, data=None)
+                store.put_leaf(new_leaf_node)
                 if bit == 0:
                     cur_node.d0 = new_leaf_node.nid
                 else:
                     cur_node.d1 = new_leaf_node.nid
                 store.put_node(cur_node)
+                cur_id = new_leaf_node.nid
             else:
-                raise ValueError(
-                    f"第 {bit_pos} 层节点 {cur_id:#x} 不是内部节点，无法挂载子节点"
-                )
-            cur_id = new_leaf_node.nid
+                # 还没到底：建立新的内部节点作为过渡
+                new_node_obj = Node(nid=new_id(), up=cur_id, d0=None, d1=None)
+                store.put_node(new_node_obj)
+                if bit == 0:
+                    cur_node.d0 = new_node_obj.nid
+                else:
+                    cur_node.d1 = new_node_obj.nid
+                store.put_node(cur_node)
+                cur_id = new_node_obj.nid
         else:
             cur_id = nxt
 
@@ -142,38 +156,3 @@ def query(store: Store1D, knowed_node_id: ID, d: int) -> Dict[str, Any]:
         "common_top": common_top_id,
         "target": target_id,
     }
-
-
-def demo():
-    """快速演示：建一棵小树，做一次查询。"""
-    import os
-
-    db_path = "demo_1d.db"
-    if os.path.exists(db_path):
-        os.remove(db_path)
-
-    store = Store1D(db_path)
-
-    # 建两个叶子作为兄弟，共享同一个父节点
-    leaf_a = new_leaf(up=None, data=b"data_A")
-    leaf_b = new_leaf(up=None, data=b"data_B")
-    store.put_leaf(leaf_a)
-    store.put_leaf(leaf_b)
-
-    # 建立父节点，把两个叶子挂上去
-    parent = new_node(up=None, d0=leaf_a.nid, d1=leaf_b.nid)
-    store.put_node(parent)
-    leaf_a.up = parent.nid
-    leaf_b.up = parent.nid
-    store.put_leaf(leaf_a)
-    store.put_leaf(leaf_b)
-
-    # 查询：从 leaf_a 出发，d=1（找右兄弟）
-    result = query(store, leaf_a.nid, 1)
-    print("查询结果：", result)
-
-    store.close()
-
-
-if __name__ == "__main__":
-    demo()

@@ -74,9 +74,36 @@ def main():
         os.remove(db_path)
     store = Store1D(db_path)
 
-    root, leaves = build_tree(store)
+    # === 立足叶子测试 ===
+    entry_id_1 = store.get_entry_leaf_id()
+    assert entry_id_1 is not None, "新数据库应自动创建立足叶子"
+    print(f"[INFO] 新数据库自动创建立足叶子: {entry_id_1:#x}")
+
+    entry_id_2 = store.get_entry_leaf_id()
+    assert entry_id_1 == entry_id_2, "多次调用 get_entry_leaf_id 应返回同一个 id"
+    print(f"[INFO] 多次调用 get_entry_leaf_id 返回相同 id: {entry_id_2:#x}")
+
+    # 从立足叶子出发查询
+    r = query(store, entry_id_1, d=1)
+    assert r["found"] is True, "从立足叶子出发查询应成功"
+    print(f"[INFO] 从立足叶子出发查询 d=1: target={r['target']:#x}")
+
+    # 显式设定新的立足叶子
+    new_entry_leaf = new_leaf(data=b"new_entry")
+    store.put_leaf(new_entry_leaf)
+    store.set_entry_leaf(new_entry_leaf.nid)
+    entry_id_3 = store.get_entry_leaf_id()
+    assert entry_id_3 == new_entry_leaf.nid, "set_entry_leaf 后应返回新立足叶子 id"
+    print(f"[INFO] set_entry_leaf 后立足叶子变更为: {entry_id_3:#x}")
+
     store.close()
     store = Store1D(db_path)  # 重新打开，验证持久化
+
+    entry_id_4 = store.get_entry_leaf_id()
+    assert entry_id_4 == entry_id_3, "重新打开数据库后立足叶子 id 应保持不变"
+    print(f"[INFO] 重新打开数据库后立足叶子 id 不变: {entry_id_4:#x}")
+
+    root, leaves = build_tree(store)
 
     print("=== 基础查询测试 ===")
     # leaf 0 和 leaf 1 是兄弟，共享同一个 L2 父节点
