@@ -21,14 +21,27 @@ def slot_of(parent: Node, child_id: ID) -> int:
     )
 
 
-def encode_d_code(dx: int, dy: int, g: int) -> int:
-    """把 (dx, dy) 打包为 base-4 数，第 i 位 = dx_i + 2*dy_i。"""
-    code = 0
+def deinterleave(uppath: int, g: int) -> tuple[int, int]:
+    """从 base-4 uppath 中分离出 x、y 两个二进制路径。"""
+    x = 0
+    y = 0
     for i in range(g + 1):
-        dx_bit = (dx >> i) & 1
-        dy_bit = (dy >> i) & 1
-        code |= (dx_bit + 2 * dy_bit) << (2 * i)
-    return code
+        slot = (uppath >> (2 * i)) & 3
+        x_bit = slot & 1
+        y_bit = (slot >> 1) & 1
+        x |= x_bit << i
+        y |= y_bit << i
+    return x, y
+
+
+def interleave(map_x: int, map_y: int, g: int) -> int:
+    """把 x、y 两个二进制地图按位打包成 base-4 地图（无进位）。"""
+    result = 0
+    for i in range(g + 1):
+        x_bit = (map_x >> i) & 1
+        y_bit = (map_y >> i) & 1
+        result |= (x_bit + 2 * y_bit) << (2 * i)
+    return result
 
 
 def query(store: Store2D, knowed_node_id: ID, dx: int, dy: int) -> Dict[str, Any]:
@@ -109,9 +122,11 @@ def query(store: Store2D, knowed_node_id: ID, dx: int, dy: int) -> Dict[str, Any
     if common_top is None:
         common_top = store.get_leaf(common_top_id)
 
-    mask = (1 << (2 * (g + 1))) - 1
-    D_code = encode_d_code(dx, dy, g)
-    map_val = (uppath + D_code) & mask
+    mask = (1 << (g + 1)) - 1
+    uppath_x, uppath_y = deinterleave(uppath, g)
+    map_x = (uppath_x + dx) & mask
+    map_y = (uppath_y + dy) & mask
+    map_val = interleave(map_x, map_y, g)
 
     cur_id = common_top_id
     for bit_pos in range(g, -1, -1):

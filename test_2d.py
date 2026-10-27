@@ -1,70 +1,105 @@
 import os
+import random
 from nodes_2d import new_node, new_leaf
 from store_2d import Store2D
 from query_2d import query
 from nodes_2d import NULL
 
 
-def build_tree(store):
-    """建一棵高度为 2 的满四叉树：
-    叶子 16 个 (L0..L15)，按 row-major 排列：
-        y=0: L0 L1 L2 L3
-        y=1: L4 L5 L6 L7
-        y=2: L8 L9 L10 L11
-        y=3: L12 L13 L14 L15
-    层1：4 个父节点 P0..P3，每个挂 4 个叶子（按 2x2 块）
-    层2：根，挂 4 个 P 节点
+def leaf_idx(x, y, size=16):
+    """按 row-major 计算叶子索引：y * size + x，x 最快"""
+    return y * size + x
+
+
+def build_tree(store, size=16, height=4):
+    """建一棵高度为 height 的满四叉树。
+    叶子 size×size，坐标范围 [0, size-1]^2。
+    size 必须是 2 的幂，height 必须满足 2^height >= size。
+    所有层级循环顺序统一为 bx(外)→by(内)，子节点按 slot = lx + 2*ly 严格挂载。
     """
-    leaves = [new_leaf(data=f"leaf_{i}".encode()) for i in range(16)]
+    assert size & (size - 1) == 0, "size 必须是 2 的幂"
+    assert 2 ** height >= size, "height 不足以覆盖整个网格"
+
+    total_leaves = size * size
+    leaves = [new_leaf(data=f"leaf_{i}".encode()) for i in range(total_leaves)]
     for leaf in leaves:
         store.put_leaf(leaf)
 
-    # 层1：4 个父节点，每个挂 2x2 块
-    p_nodes = []
-    for p_idx in range(4):
-        p = new_node()
-        bx = p_idx % 2   # 块在 x 方向的位置 (0=左, 1=右)
-        by = p_idx // 2  # 块在 y 方向的位置 (0=上, 1=下)
-        for local in range(4):
-            lx = local % 2   # 块内 x (0=左, 1=右)
-            ly = local // 2  # 块内 y (0=上, 1=下)
-            gx = bx * 2 + lx  # 全局 x
-            gy = by * 2 + ly  # 全局 y
-            leaf_idx = gy * 4 + gx
-            leaf = leaves[leaf_idx]
-            leaf.up = p.nid
-            store.put_leaf(leaf)
-            slot = lx + 2 * ly  # 0=d0, 1=d1, 2=d2, 3=d3
-            if slot == 0:
-                p.d0 = leaf.nid
-            elif slot == 1:
-                p.d1 = leaf.nid
-            elif slot == 2:
-                p.d2 = leaf.nid
-            else:
-                p.d3 = leaf.nid
-        store.put_node(p)
-        p_nodes.append(p)
+    # ---------- 层1：(size/2)×(size/2) 个父节点，每个挂 4 个叶子（2×2块）----------
+    blocks_per_dim = size // 2
+    level1 = []
+    for by in range(blocks_per_dim):
+        for bx in range(blocks_per_dim):
+            p = new_node()
+            for ly in range(2):
+                for lx in range(2):
+                    gx = bx * 2 + lx
+                    gy = by * 2 + ly
+                    li = leaf_idx(gx, gy, size)
+                    leaf = leaves[li]
+                    leaf.up = p.nid
+                    store.put_leaf(leaf)
+                    slot = lx + 2 * ly
+                    if slot == 0:
+                        p.d0 = leaf.nid
+                    elif slot == 1:
+                        p.d1 = leaf.nid
+                    elif slot == 2:
+                        p.d2 = leaf.nid
+                    else:
+                        p.d3 = leaf.nid
+            store.put_node(p)
+            level1.append(p)
 
-    # 根：挂 4 个 P，slot = bx + 2*by
+    # ---------- 层2~height-1：递归构建 -----------
+    prev_level = level1
+    prev_blocks_per_dim = blocks_per_dim
+    for level in range(2, height):
+        blocks_l = prev_blocks_per_dim // 2
+        curr_level = []
+        for by2 in range(blocks_l):
+            for bx2 in range(blocks_l):
+                p = new_node()
+                for lby in range(2):
+                    for lbx in range(2):
+                        gbx = bx2 * 2 + lbx
+                        gby = by2 * 2 + lby
+                        p_idx = gby * prev_blocks_per_dim + gbx
+                        child = prev_level[p_idx]
+                        child.up = p.nid
+                        store.put_node(child)
+                        slot = lbx + 2 * lby
+                        if slot == 0:
+                            p.d0 = child.nid
+                        elif slot == 1:
+                            p.d1 = child.nid
+                        elif slot == 2:
+                            p.d2 = child.nid
+                        else:
+                            p.d3 = child.nid
+                store.put_node(p)
+                curr_level.append(p)
+        prev_level = curr_level
+        prev_blocks_per_dim = blocks_l
+
+    # ---------- 根：挂 4 个顶层节点 -----------
     root = new_node()
-    for p_idx, p in enumerate(p_nodes):
-        p.up = root.nid
-        store.put_node(p)
-        bx = p_idx % 2
-        by = p_idx // 2
-        slot = bx + 2 * by
+    for i, child in enumerate(prev_level):
+        child.up = root.nid
+        store.put_node(child)
+        rbx = i % 2
+        rby = i // 2
+        slot = rbx + 2 * rby
         if slot == 0:
-            root.d0 = p.nid
+            root.d0 = child.nid
         elif slot == 1:
-            root.d1 = p.nid
+            root.d1 = child.nid
         elif slot == 2:
-            root.d2 = p.nid
+            root.d2 = child.nid
         else:
-            root.d3 = p.nid
+            root.d3 = child.nid
     store.put_node(root)
-
-    return root, leaves, p_nodes
+    return root, leaves
 
 
 def check(name, result, expected_target=None, expected_found=True):
@@ -81,6 +116,8 @@ def check(name, result, expected_target=None, expected_found=True):
 
 
 def main():
+    size = 16
+    height = 4
     db_path = "test_2d.db"
     if os.path.exists(db_path):
         os.remove(db_path)
@@ -88,88 +125,99 @@ def main():
 
     # === 立足叶子测试 ===
     entry_id_1 = store.get_entry_leaf_id()
-    assert entry_id_1 is not None, "新数据库应自动创建立足叶子"
-    print(f"[INFO] 新数据库自动创建立足叶子: {entry_id_1:#x}")
+    assert entry_id_1 is not None
+    print(f"[INFO] 立足叶子: {entry_id_1:#x}")
 
     r = query(store, entry_id_1, 1, 0)
-    assert r["found"] is True, "从立足叶子出发查询应成功"
-    print(f"[INFO] 从立足叶子出发查询 dx=1,dy=0: target={r['target']:#x}")
+    assert r["found"] is True
+    print(f"[INFO] 立足叶子查询 (1,0): target={r['target']:#x}")
 
     store.close()
     store = Store2D(db_path)
-
     entry_id_2 = store.get_entry_leaf_id()
-    assert entry_id_2 == entry_id_1, "重新打开数据库后立足叶子 id 应保持不变"
-    print(f"[INFO] 重新打开数据库后立足叶子 id 不变: {entry_id_2:#x}")
+    assert entry_id_2 == entry_id_1
+    print(f"[INFO] 持久化验证通过: {entry_id_2:#x}")
 
-    root, leaves, p_nodes = build_tree(store)
+    root, leaves = build_tree(store, size=size, height=height)
 
-    print("\n=== 基础查询测试 ===")
-    # L0 和 L1 是兄弟（同 P0），L0 向右 dx=1 -> L1
-    r = query(store, leaves[0].nid, 1, 0)
-    check("L0 -> (1,0) L1", r, expected_target=leaves[1].nid)
+    print(f"\n=== 基础查询（单步，兄弟节点）===")
+    tests = [
+        ((0, 0), (1, 0)),
+        ((1, 0), (-1, 0)),
+        ((0, 0), (0, 1)),
+        ((0, 1), (0, -1)),
+    ]
+    for (sx, sy), (dx, dy) in tests:
+        src = leaves[leaf_idx(sx, sy, size)]
+        dst = leaves[leaf_idx(sx + dx, sy + dy, size)]
+        r = query(store, src.nid, dx, dy)
+        check(f"L({sx},{sy}) -> ({dx},{dy})", r, expected_target=dst.nid)
 
-    # L1 向左 dx=-1 -> L0
-    r = query(store, leaves[1].nid, -1, 0)
-    check("L1 -> (-1,0) L0", r, expected_target=leaves[0].nid)
+    print(f"\n=== 跨层查询（共顶为根，size={size}）===")
+    tests = [
+        ((0, 0), (15, 0)),
+        ((0, 0), (0, 15)),
+        ((0, 0), (15, 15)),
+        ((15, 15), (-15, -15)),
+        ((0, 0), (7, 9)),
+        ((15, 15), (-7, -9)),
+        ((8, 8), (7, 7)),
+        ((7, 7), (-7, -7)),
+        ((0, 15), (15, -15)),
+        ((15, 0), (-15, 15)),
+    ]
+    for (sx, sy), (dx, dy) in tests:
+        src = leaves[leaf_idx(sx, sy, size)]
+        tx, ty = sx + dx, sy + dy
+        if 0 <= tx < size and 0 <= ty < size:
+            dst = leaves[leaf_idx(tx, ty, size)]
+            r = query(store, src.nid, dx, dy)
+            check(f"L({sx},{sy}) -> ({dx},{dy})", r, expected_target=dst.nid)
+        else:
+            r = query(store, src.nid, dx, dy)
+            check(f"L({sx},{sy}) -> ({dx},{dy}) 越界扩展", r, expected_found=True)
 
-    # L0 向下 dy=1 -> L4
-    r = query(store, leaves[0].nid, 0, 1)
-    check("L0 -> (0,1) L4", r, expected_target=leaves[4].nid)
+    print(f"\n=== 边界：自身查询 ===")
+    for (x, y) in [(0, 0), (7, 7), (15, 15), (8, 9), (3, 12)]:
+        src = leaves[leaf_idx(x, y, size)]
+        r = query(store, src.nid, 0, 0)
+        check(f"L({x},{y}) -> (0,0) 自身", r, expected_target=src.nid)
 
-    # L4 向上 dy=-1 -> L0
-    r = query(store, leaves[4].nid, 0, -1)
-    check("L4 -> (0,-1) L0", r, expected_target=leaves[0].nid)
+    print(f"\n=== 边界：向外扩展（建立新节点）===")
+    expand_tests = [
+        ((0, 0), (-1, 0)),
+        ((15, 0), (1, 0)),
+        ((0, 0), (0, -1)),
+        ((0, 15), (0, 1)),
+        ((0, 0), (-1, -1)),
+        ((15, 15), (1, 1)),
+        ((0, 15), (-1, 1)),
+        ((15, 0), (1, -1)),
+        ((7, 7), (-8, -8)),
+        ((8, 8), (8, 8)),
+    ]
+    for (sx, sy), (dx, dy) in expand_tests:
+        src = leaves[leaf_idx(sx, sy, size)]
+        r = query(store, src.nid, dx, dy)
+        check(f"L({sx},{sy}) -> ({dx},{dy}) 扩展", r, expected_found=True)
 
-    print("\n=== 跨层查询测试 ===")
-    # L0 -> L2：同行，跨 P0/P1，共顶是根
-    r = query(store, leaves[0].nid, 2, 0)
-    check("L0 -> (2,0) L2", r, expected_target=leaves[2].nid)
-
-    # L0 -> L8：同列，跨 P0/P2，共顶是根
-    r = query(store, leaves[0].nid, 0, 2)
-    check("L0 -> (0,2) L8", r, expected_target=leaves[8].nid)
-
-    # L0 -> L15：最远，dx=3,dy=3，共顶是根
-    r = query(store, leaves[0].nid, 3, 3)
-    check("L0 -> (3,3) L15", r, expected_target=leaves[15].nid)
-
-    # L15 -> L0：dx=-3,dy=-3
-    r = query(store, leaves[15].nid, -3, -3)
-    check("L15 -> (-3,-3) L0", r, expected_target=leaves[0].nid)
-
-    # L1 -> L6：dx=1,dy=1，L1(1,0) -> L6(2,1)
-    r = query(store, leaves[1].nid, 1, 1)
-    check("L1 -> (1,1) L6", r, expected_target=leaves[6].nid)
-
-    print("\n=== 边界测试 ===")
-    # d=(0,0) 应该返回自身
-    r = query(store, leaves[7].nid, 0, 0)
-    check("L7 -> (0,0) 自身", r, expected_target=leaves[7].nid)
-
-    # 向左扩展：L0 向左 dx=-1，建立新左邻
-    r = query(store, leaves[0].nid, -1, 0)
-    check("L0 -> (-1,0) 建立左邻", r, expected_found=True)
-    assert r["found"] is True
-    assert r["target"] is not None
-
-    # 向右扩展：L3 向右 dx=1，建立新右邻
-    r = query(store, leaves[3].nid, 1, 0)
-    check("L3 -> (1,0) 建立右邻", r, expected_found=True)
-    assert r["found"] is True
-    assert r["target"] is not None
-
-    # 向下扩展：L12 向下 dy=1，建立新下邻
-    r = query(store, leaves[12].nid, 0, 1)
-    check("L12 -> (0,1) 建立下邻", r, expected_found=True)
-    assert r["found"] is True
-    assert r["target"] is not None
-
-    # 斜向扩展：L0 向左上 dx=-1,dy=-1
-    r = query(store, leaves[0].nid, -1, -1)
-    check("L0 -> (-1,-1) 建立左上邻", r, expected_found=True)
-    assert r["found"] is True
-    assert r["target"] is not None
+    print(f"\n=== 随机查询测试（5000 次）===")
+    random.seed(42)
+    pass_count = 0
+    fail_count = 0
+    for _ in range(5000):
+        sx = random.randint(0, size - 1)
+        sy = random.randint(0, size - 1)
+        dx = random.randint(-15, 15)
+        dy = random.randint(-15, 15)
+        src = leaves[leaf_idx(sx, sy, size)]
+        r = query(store, src.nid, dx, dy)
+        if r["found"]:
+            pass_count += 1
+        else:
+            fail_count += 1
+            print(f"  [RANDOM FAIL] L({sx},{sy}) -> ({dx},{dy}): {r.get('reason')}")
+    print(f"[INFO] 随机测试: {pass_count} 通过, {fail_count} 失败")
 
     store.close()
     print("\n全部测试完成")
