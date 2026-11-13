@@ -1,0 +1,234 @@
+import os
+import time
+import random
+from nodes_2d_base import new_node, new_base_leaf, new_id
+from store_2d import Store2D
+from query_2d_base import query, batch_query
+
+
+def leaf_idx(x, y, size=16):
+    return y * size + x
+
+
+def build_tree(store, size=16, height=4):
+    assert size & (size - 1) == 0
+    assert 2 ** height >= size
+
+    total_leaves = size * size
+    leaves = [new_base_leaf(data=f"leaf_{i}".encode()) for i in range(total_leaves)]
+    for leaf in leaves:
+        leaf.nid = new_id()
+
+    blocks_per_dim = size // 2
+    level1 = []
+    for by in range(blocks_per_dim):
+        for bx in range(blocks_per_dim):
+            p = new_node()
+            leaf_slots = []
+            for ly in range(2):
+                for lx in range(2):
+                    gx = bx * 2 + lx
+                    gy = by * 2 + ly
+                    li = leaf_idx(gx, gy, size)
+                    leaf = leaves[li]
+                    slot = lx + 2 * ly
+                    if slot == 0:
+                        p.d0 = leaf.nid
+                    elif slot == 1:
+                        p.d1 = leaf.nid
+                    elif slot == 2:
+                        p.d2 = leaf.nid
+                    else:
+                        p.d3 = leaf.nid
+                    leaf_slots.append((leaf, slot))
+            store.put_node(p, commit=False)
+            for leaf, slot in leaf_slots:
+                leaf.up = p.nid
+            level1.append(p)
+
+    prev_level = level1
+    prev_blocks_per_dim = blocks_per_dim
+    for level in range(2, height):
+        blocks_l = prev_blocks_per_dim // 2
+        curr_level = []
+        for by2 in range(blocks_l):
+            for bx2 in range(blocks_l):
+                p = new_node()
+                children = []
+                for lby in range(2):
+                    for lbx in range(2):
+                        gbx = bx2 * 2 + lbx
+                        gby = by2 * 2 + lby
+                        p_idx = gby * prev_blocks_per_dim + gbx
+                        child = prev_level[p_idx]
+                        children.append(child)
+                        slot = lbx + 2 * lby
+                        if slot == 0:
+                            p.d0 = child.nid
+                        elif slot == 1:
+                            p.d1 = child.nid
+                        elif slot == 2:
+                            p.d2 = child.nid
+                        else:
+                            p.d3 = child.nid
+                store.put_node(p, commit=False)
+                for child in children:
+                    child.up = p.nid
+                    store.put_node(child, commit=False)
+                curr_level.append(p)
+        prev_level = curr_level
+        prev_blocks_per_dim = blocks_l
+
+    root = new_node()
+    store.put_node(root, commit=False)
+    for i, child in enumerate(prev_level):
+        child.up = root.nid
+        store.put_node(child, commit=False)
+        rbx = i % 2
+        rby = i // 2
+        slot = rbx + 2 * rby
+        if slot == 0:
+            root.d0 = child.nid
+        elif slot == 1:
+            root.d1 = child.nid
+        elif slot == 2:
+            root.d2 = child.nid
+        else:
+            root.d3 = child.nid
+    store.put_node(root, commit=False)
+    for leaf in leaves:
+        store.put_leaf(leaf, commit=False)
+    store.commit()
+    return root, leaves
+
+
+def check(name, result, expected_target=None, expected_found=True):
+    ok = result["found"] == expected_found
+    if expected_found and expected_target is not None:
+        ok = ok and result["target"] == expected_target
+    status = "PASS" if ok else "FAIL"
+    print(f"[{status}] {name}: found={result['found']}, g={result.get('g')}, "
+          f"uppath={result.get('uppath')}, map={result.get('map')}, "
+          f"target={result.get('target')}")
+    if not ok:
+        print(f"  expected found={expected_found}, target={expected_target}")
+    return ok
+
+
+def main():
+    size = 16
+    height = 4
+    db_path = "test_2d_base.db"
+    if os.path.exists(db_path):
+        os.remove(db_path)
+    store = Store2D(db_path)
+
+    entry_id_1 = store.get_entry_leaf_id()
+    assert entry_id_1 is not None
+    print(f"[INFO] 立足叶子: {entry_id_1:#x}")
+
+    r = query(store, entry_id_1, 1, 0)
+    assert r["found"] is True
+    print(f"[INFO] 立足叶子查询 (1,0): target={r['target']:#x}")
+
+    store.close()
+    store = Store2D(db_path)
+    entry_id_2 = store.get_entry_leaf_id()
+    assert entry_id_2 == entry_id_1
+    print(f"[INFO] 持久化验证通过: {entry_id_2:#x}")
+
+    root, leaves = build_tree(store, size=size, height=height)
+
+    print(f"\n=== 基础查询（单步，兄弟节点）===")
+    tests = [
+        ((0, 0), (1, 0)),
+        ((1, 0), (-1, 0)),
+        ((0, 0), (0, 1)),
+        ((0, 1), (0, -1)),
+    ]
+    for (sx, sy), (dx, dy) in tests:
+        src = leaves[leaf_idx(sx, sy, size)]
+        dst = leaves[leaf_idx(sx + dx, sy + dy, size)]
+        r = query(store, src.nid, dx, dy)
+        check(f"L({sx},{sy}) -> ({dx},{dy})", r, expected_target=dst.nid)
+
+    print(f"\n=== 跨层查询（共顶为根，size={size}）===")
+    tests = [
+        ((0, 0), (15, 0)),
+        ((0, 0), (0, 15)),
+        ((0, 0), (15, 15)),
+        ((15, 15), (-15, -15)),
+        ((0, 0), (7, 9)),
+        ((15, 15), (-7, -9)),
+        ((8, 8), (7, 7)),
+        ((7, 7), (-7, -7)),
+        ((0, 15), (15, -15)),
+        ((15, 0), (-15, 15)),
+    ]
+    for (sx, sy), (dx, dy) in tests:
+        src = leaves[leaf_idx(sx, sy, size)]
+        tx, ty = sx + dx, sy + dy
+        if 0 <= tx < size and 0 <= ty < size:
+            dst = leaves[leaf_idx(tx, ty, size)]
+            r = query(store, src.nid, dx, dy)
+            check(f"L({sx},{sy}) -> ({dx},{dy})", r, expected_target=dst.nid)
+        else:
+            r = query(store, src.nid, dx, dy)
+            check(f"L({sx},{sy}) -> ({dx},{dy}) 越界扩展", r, expected_found=True)
+
+    print(f"\n=== 边界：自身查询 ===")
+    for (x, y) in [(0, 0), (7, 7), (15, 15), (8, 9), (3, 12)]:
+        src = leaves[leaf_idx(x, y, size)]
+        r = query(store, src.nid, 0, 0)
+        check(f"L({x},{y}) -> (0,0) 自身", r, expected_target=src.nid)
+
+    print(f"\n=== 边界：向外扩展（建立新节点）===")
+    expand_tests = [
+        ((0, 0), (-1, 0)),
+        ((15, 0), (1, 0)),
+        ((0, 0), (0, -1)),
+        ((0, 15), (0, 1)),
+        ((0, 0), (-1, -1)),
+        ((15, 15), (1, 1)),
+        ((0, 15), (-1, 1)),
+        ((15, 0), (1, -1)),
+        ((7, 7), (-8, -8)),
+        ((8, 8), (8, 8)),
+    ]
+    for (sx, sy), (dx, dy) in expand_tests:
+        src = leaves[leaf_idx(sx, sy, size)]
+        r = query(store, src.nid, dx, dy)
+        check(f"L({sx},{sy}) -> ({dx},{dy}) 扩展", r, expected_found=True)
+
+    print(f"\n=== 随机查询测试（5000 次）===")
+    random.seed(42)
+    queries = []
+    query_params = []
+    for _ in range(5000):
+        sx = random.randint(0, size - 1)
+        sy = random.randint(0, size - 1)
+        dx = random.randint(-15, 15)
+        dy = random.randint(-15, 15)
+        src = leaves[leaf_idx(sx, sy, size)]
+        queries.append((src.nid, dx, dy))
+        query_params.append((sx, sy, dx, dy))
+    results = batch_query(store, queries)
+    pass_count = 0
+    fail_count = 0
+    for (sx, sy, dx, dy), r in zip(query_params, results):
+        if r["found"]:
+            pass_count += 1
+        else:
+            fail_count += 1
+            print(f"  [RANDOM FAIL] L({sx},{sy}) -> ({dx},{dy}): {r.get('reason')}")
+    print(f"[INFO] 随机测试: {pass_count} 通过, {fail_count} 失败")
+
+    store.close()
+    print("\n全部测试完成")
+
+
+if __name__ == "__main__":
+    t0 = time.perf_counter()
+    main()
+    t1 = time.perf_counter()
+    print(f"\n[TIMING] 总耗时: {t1 - t0:.4f}s")

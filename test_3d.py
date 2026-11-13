@@ -1,8 +1,8 @@
 import os
 import random
-from nodes_3d import new_node, new_leaf
+from nodes_3d import new_node, new_leaf, new_id
 from store_3d import Store3D
-from query_3d import query
+from query_3d import query, batch_query
 from nodes_3d import NULL
 
 
@@ -24,7 +24,7 @@ def build_tree(store, size=16, height=4):
     total_leaves = size * size * size
     leaves = [new_leaf(data=f"leaf_{i}".encode()) for i in range(total_leaves)]
     for leaf in leaves:
-        store.put_leaf(leaf)
+        leaf.nid = new_id()
 
     blocks_per_dim = size // 2
 
@@ -43,7 +43,6 @@ def build_tree(store, size=16, height=4):
                             gz = bz * 2 + lz
                             li = leaf_idx(gx, gy, gz, size)
                             leaf = leaves[li]
-                            store.put_leaf(leaf)
                             slot = lx + 2 * ly + 4 * lz
                             if slot == 0:
                                 p.d0 = leaf.nid
@@ -62,10 +61,9 @@ def build_tree(store, size=16, height=4):
                             else:
                                 p.d7 = leaf.nid
                             leaf_slots.append((leaf, slot))
-                store.put_node(p)
+                store.put_node(p, commit=False)
                 for leaf, slot in leaf_slots:
                     leaf.up = p.nid
-                    store.put_leaf(leaf)
                 level1.append(p)
 
     # ---------- 层2~height-1：递归构建 -----------
@@ -107,20 +105,20 @@ def build_tree(store, size=16, height=4):
                                     p.d6 = child.nid
                                 else:
                                     p.d7 = child.nid
-                    store.put_node(p)
+                    store.put_node(p, commit=False)
                     for child in children:
                         child.up = p.nid
-                        store.put_node(child)
+                        store.put_node(child, commit=False)
                     curr_level.append(p)
         prev_level = curr_level
         prev_blocks_per_dim = blocks_l
 
     # ---------- 根：挂 8 个顶层节点 -----------
     root = new_node()
-    store.put_node(root)
+    store.put_node(root, commit=False)
     for i, child in enumerate(prev_level):
         child.up = root.nid
-        store.put_node(child)
+        store.put_node(child, commit=False)
         rbx = i // 4
         rby = (i % 4) // 2
         rbz = i % 2
@@ -141,7 +139,10 @@ def build_tree(store, size=16, height=4):
             root.d6 = child.nid
         else:
             root.d7 = child.nid
-    store.put_node(root)
+    store.put_node(root, commit=False)
+    for leaf in leaves:
+        store.put_leaf(leaf, commit=False)
+    store.commit()
     return root, leaves
 
 
@@ -253,8 +254,8 @@ def main():
 
     print(f"\n=== 随机查询测试（5000 次）===")
     random.seed(42)
-    pass_count = 0
-    fail_count = 0
+    queries = []
+    query_params = []
     for _ in range(5000):
         sx = random.randint(0, size - 1)
         sy = random.randint(0, size - 1)
@@ -263,7 +264,12 @@ def main():
         dy = random.randint(-15, 15)
         dz = random.randint(-15, 15)
         src = leaves[leaf_idx(sx, sy, sz, size)]
-        r = query(store, src.nid, dx, dy, dz)
+        queries.append((src.nid, dx, dy, dz))
+        query_params.append((sx, sy, sz, dx, dy, dz))
+    results = batch_query(store, queries)
+    pass_count = 0
+    fail_count = 0
+    for (sx, sy, sz, dx, dy, dz), r in zip(query_params, results):
         if r["found"]:
             pass_count += 1
         else:

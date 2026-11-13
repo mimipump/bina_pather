@@ -2,6 +2,7 @@ import secrets
 from dataclasses import dataclass
 from typing import Optional
 
+
 # =============================================================================
 # 基础类型
 # =============================================================================
@@ -31,7 +32,16 @@ class Node:
 
 
 @dataclass(slots=True)
+class BaseLeaf:
+    """基础叶子：无邻居字段，用于不启用 nbr 的树。"""
+    nid: ID          # 本级id
+    up: Optional[ID] # 上级id
+    data: ID         # 数据id
+
+
+@dataclass(slots=True)
 class Leaf:
+    """带邻居字段的叶子：nbr1/nbr2/nbr3 为 x/y/z 轴非同父邻叶。"""
     nid: ID          # 本级id
     up: Optional[ID] # 上级id
     data: ID         # 数据id
@@ -55,6 +65,12 @@ def new_node(up: Optional[ID] = NULL,
              nid: Optional[ID] = NULL) -> Node:
     return Node(nid=nid, up=up, d0=d0, d1=d1, d2=d2, d3=d3,
                 d4=d4, d5=d5, d6=d6, d7=d7)
+
+
+def new_base_leaf(up: Optional[ID] = NULL,
+                  data: Optional[ID] = NULL,
+                  nid: Optional[ID] = NULL) -> BaseLeaf:
+    return BaseLeaf(nid=nid, up=up, data=data)
 
 
 def new_leaf(up: Optional[ID] = NULL,
@@ -87,7 +103,9 @@ def build_parent(child: Node, dx: int = 0, dy: int = 0, dz: int = 0) -> Node:
 
 
 def build_child(parent: Node, dx: int = 0, dy: int = 0, dz: int = 0) -> Leaf:
-    """向下建一个子节点，挂到 parent 的指定口，返回子节点。"""
+    """向下建一个子节点，挂到 parent 的指定口，返回子节点。
+    不绑定 nbr（nbr 需在 build_tree 按空间位置正确绑定）。
+    """
     slot = (1 if dx < 0 else 0) + 2 * (1 if dy < 0 else 0) + 4 * (1 if dz < 0 else 0)
     child = Leaf(nid=new_id(), up=parent.nid, data=None)
     slots = [parent.d0, parent.d1, parent.d2, parent.d3,
@@ -96,3 +114,25 @@ def build_child(parent: Node, dx: int = 0, dy: int = 0, dz: int = 0) -> Leaf:
     (parent.d0, parent.d1, parent.d2, parent.d3,
      parent.d4, parent.d5, parent.d6, parent.d7) = slots
     return child
+
+
+def bind_nbr_3d(store, leaf_a: Leaf, leaf_b: Leaf, axis: int) -> None:
+    """显式绑定两个叶子的 nbr（axis=1 x/nbr1, axis=2 y/nbr2, axis=3 z/nbr3）。
+
+    仅当两叶直接父节点不同（非同父）时才绑定；同父兄弟不绑定。
+    """
+    if leaf_a.nid == leaf_b.nid:
+        return
+    if leaf_a.up is not None and leaf_b.up is not None and leaf_a.up == leaf_b.up:
+        return  # 同父，不绑定
+    if axis == 1:
+        leaf_a.nbr1 = leaf_b.nid
+        leaf_b.nbr1 = leaf_a.nid
+    elif axis == 2:
+        leaf_a.nbr2 = leaf_b.nid
+        leaf_b.nbr2 = leaf_a.nid
+    else:
+        leaf_a.nbr3 = leaf_b.nid
+        leaf_b.nbr3 = leaf_a.nid
+    store.put_leaf(leaf_a)
+    store.put_leaf(leaf_b)

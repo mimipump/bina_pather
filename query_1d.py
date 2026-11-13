@@ -18,8 +18,19 @@ def slot_of(parent: Node, child_id: ID) -> int:
     )
 
 
-def query(store: Store1D, knowed_node_id: ID, d: int) -> Dict[str, Any]:
+def _get_node(store: Store1D, nid: ID) -> Optional[Node | Leaf]:
+    node = store.get_node(nid)
+    if node is None:
+        node = store.get_leaf(nid)
+    return node
+
+
+def query(store: Store1D, knowed_node_id: ID, d: int, _commit: bool = True) -> Dict[str, Any]:
     """一维查询：从已知叶子节点出发，索引距离 d 处的目标叶子。
+
+    单路径查询：从起点唯一向上爬树，直到 |sumD| >= |d| 找到共顶，
+    再从共顶按二进制地图下行到目标叶子。
+    内部动态建节点延迟提交，查询结束前统一 commit。
 
     返回字典：
         g          - 共顶层数（break 时的 i）
@@ -28,131 +39,176 @@ def query(store: Store1D, knowed_node_id: ID, d: int) -> Dict[str, Any]:
         common_top - 共顶节点 id
         target     - 目标叶子 id
     """
-    sumD = 0
-    uppath = 0
-    g = -1
-    max_iter = 1 << 30   # 一个很大且合理的数
+    try:
+        if d == 0:
+            node = _get_node(store, knowed_node_id)
+            if node is None:
+                return {"found": False, "reason": "未知节点", "g": -1}
+            return {
+                "found": True,
+                "g": 0,
+                "uppath": 0,
+                "map": 0,
+                "common_top": None,
+                "target": knowed_node_id,
+            }
 
-    this_node_id = knowed_node_id
+        sumD = 0
+        uppath = 0
+        g = -1
+        max_iter = 1 << 30
 
-    # 载入起点节点（叶子或普通节点）
-    this_node = store.get_node(this_node_id)
-    if this_node is None:
-        this_node = store.get_leaf(this_node_id)
+        this_node_id = knowed_node_id
+
+        # 载入起点节点（叶子或普通节点），并记入本地路径缓存
+        path_nodes: dict[ID, Any] = {}
+        this_node = store.get_node(this_node_id)
         if this_node is None:
-            raise ValueError(f"未知节点 {knowed_node_id:#x}")
+            this_node = store.get_leaf(this_node_id)
+            if this_node is None:
+                raise ValueError(f"未知节点 {knowed_node_id:#x}")
+        path_nodes[this_node_id] = this_node
 
-    for i in range(max_iter):
-        # --- 确保 this_node 有上级 ---
-        if this_node.up is None:
-            # 没有上级，建立一个合法上级，把当前节点挂到指定口
-            # slot 由 d 的方向决定：d<0 时放右口(1)，d>=0 时放左口(0)
-            slot = 1 if d < 0 else 0
-            parent = new_node(up=None, d0=None, d1=None)
-            if slot == 0:
-                parent.d0 = this_node_id
-            else:
-                parent.d1 = this_node_id
-            store.put_node(parent)
-            if isinstance(this_node, Leaf):
-                this_node.up = parent.nid
-                store.put_leaf(this_node)
-            else:
-                this_node.up = parent.nid
-                store.put_node(this_node)
-            parent_node = parent
-        else:# 有上级，直接上爬
-            parent_node = store.get_node(this_node.up)
-            if parent_node is None:
-                raise ValueError(f"父节点 {this_node.up:#x} 不存在")
+        for i in range(max_iter):
+            # --- 确保 this_node 有上级 ---
+            if this_node.up is None:
+                # 没有上级，建立一个合法上级，把当前节点挂到指定口
+                # slot 由 d 的方向决定：d<0 时放右口(1)，d>=0 时放左口(0)
+                slot = 1 if d < 0 else 0
+                parent = new_node(up=None, d0=None, d1=None)
+                if slot == 0:
+                    parent.d0 = this_node_id
+                else:
+                    parent.d1 = this_node_id
+                store.put_node(parent, commit=False)
+                path_nodes[parent.nid] = parent
+                if isinstance(this_node, Leaf):
+                    this_node.up = parent.nid
+                    store.put_leaf(this_node, commit=False)
+                else:
+                    this_node.up = parent.nid
+                    store.put_node(this_node, commit=False)
+                path_nodes[this_node_id] = this_node
+                parent_node = parent
+                bit = slot
+            else:# 有上级，直接上爬
+                parent_node = store.get_node(this_node.up)
+                if parent_node is None:
+                    raise ValueError(f"父节点 {this_node.up:#x} 不存在")
+                path_nodes[parent_node.nid] = parent_node
+                path_nodes[this_node_id] = this_node
+                bit = slot_of(parent_node, this_node_id)
 
-        # --- 记录本级编号（uppath 的第 i 位） ---
-        bit = slot_of(parent_node, this_node_id)
-        uppath |= (bit << i)
+            # --- 记录本级编号（uppath 的第 i 位） ---
+            uppath |= (bit << i)
 
-        # --- sumD 累加 ---
-        if (d < 0) == bit:
-            sumD += (1 << i)
+            # --- sumD 累加 ---
+            if (d < 0) == bit:
+                sumD += (1 << i)
 
-        # --- 判断是否到达共顶 ---
-        if abs(sumD) >= abs(d):
-            g = i
-            break
-        # --- 上爬到父节点 ---
-        this_node_id = parent_node.nid
-        this_node = parent_node
-    # 循环结束
-    if g < 0:
-        return {
-            "found": False,
-            "reason": "循环耗尽，未找到共顶",
-            "g": -1,
-        }
+            # --- 判断是否到达共顶 ---
+            if abs(sumD) >= abs(d):
+                g = i
+                break
+            # --- 上爬到父节点 ---
+            this_node_id = parent_node.nid
+            this_node = parent_node
+        # 循环结束
+        if g < 0:
+            return {
+                "found": False,
+                "reason": "循环耗尽，未找到共顶",
+                "g": -1,
+            }
 
-    # g >= 0：找到了共顶
-    # this_node 是第 g 层节点，this_node.up 是第 g+1 层（共顶）
-    common_top_id = this_node.up
-    common_top = store.get_node(common_top_id)
-    if common_top is None:
-        common_top = store.get_leaf(common_top_id)
+        # g >= 0：找到了共顶
+        # this_node 是第 g 层节点，this_node.up 是第 g+1 层（共顶）
+        common_top_id = this_node.up
+        common_top = store.get_node(common_top_id)
+        if common_top is None:
+            common_top = store.get_leaf(common_top_id)
 
-    # uppath 与 d 加和，得到从共顶访问到目标的二进制地图（g+1 位）
-    map_val = (uppath + d) & ((1 << (g + 1)) - 1)
+        # uppath 与 d 加和，得到从共顶访问到目标的二进制地图（g+1 位）
+        map_val = (uppath + d) & ((1 << (g + 1)) - 1)
 
-    # 从共顶出发，按地图位从高位到低位下行，找到目标叶子
-    cur_id = common_top_id
-    for bit_pos in range(g, -1, -1):
-        bit = (map_val >> bit_pos) & 1
-        cur_node = store.get_node(cur_id)
-        if cur_node is None:
-            cur_node = store.get_leaf(cur_id)
+        # 从共顶出发，按地图位从高位到低位下行，找到目标叶子
+        cur_id = common_top_id
+        for bit_pos in range(g, -1, -1):
+            bit = (map_val >> bit_pos) & 1
+            # 优先从爬树路径缓存取，避免重复 SQL 和 pickle 反序列化
+            cur_node = path_nodes.get(cur_id)
             if cur_node is None:
-                raise ValueError(f"下行时节点 {cur_id:#x} 不存在")
+                cur_node = store.get_node(cur_id)
+                if cur_node is None:
+                    cur_node = store.get_leaf(cur_id)
+                    if cur_node is None:
+                        raise ValueError(f"下行时节点 {cur_id:#x} 不存在")
 
-        # 下行过程中遇到叶子但还未到达目标层，说明树结构不完整
-        if isinstance(cur_node, Leaf) and bit_pos > 0:
-            raise ValueError(
-                f"下行时遇到叶子节点 {cur_id:#x}，但还未到达第 {bit_pos} 层，"
-                "树结构不完整"
-            )
+            # 下行过程中遇到叶子但还未到达目标层，说明树结构不完整
+            if isinstance(cur_node, Leaf) and bit_pos > 0:
+                raise ValueError(
+                    f"下行时遇到叶子节点 {cur_id:#x}，但还未到达第 {bit_pos} 层，"
+                    "树结构不完整"
+                )
 
-        if bit == 0:
-            nxt = cur_node.d0 if isinstance(cur_node, Node) else None
-        else:
-            nxt = cur_node.d1 if isinstance(cur_node, Node) else None
-
-        if nxt is None:
-            # 目标口为空：在该处建立新节点
-            if bit_pos == 0:
-                # 到达叶子层：建立新的空叶子作为目标
-                new_leaf_node = new_leaf(up=cur_id, data=None)
-                store.put_leaf(new_leaf_node)
-                if bit == 0:
-                    cur_node.d0 = new_leaf_node.nid
-                else:
-                    cur_node.d1 = new_leaf_node.nid
-                store.put_node(cur_node)
-                cur_id = new_leaf_node.nid
+            if bit == 0:
+                nxt = cur_node.d0 if isinstance(cur_node, Node) else None
             else:
-                # 还没到底：建立新的内部节点作为过渡
-                new_node_obj = Node(nid=None, up=cur_id, d0=None, d1=None)
-                store.put_node(new_node_obj)
-                if bit == 0:
-                    cur_node.d0 = new_node_obj.nid
+                nxt = cur_node.d1 if isinstance(cur_node, Node) else None
+
+            if nxt is None:
+                # 目标口为空：在该处建立新节点
+                if bit_pos == 0:
+                    # 到达叶子层：建立新的空叶子作为目标
+                    new_leaf_node = new_leaf(up=cur_id, data=None)
+                    store.put_leaf(new_leaf_node, commit=False)
+                    path_nodes[new_leaf_node.nid] = new_leaf_node
+                    if bit == 0:
+                        cur_node.d0 = new_leaf_node.nid
+                    else:
+                        cur_node.d1 = new_leaf_node.nid
+                    store.put_node(cur_node, commit=False)
+                    path_nodes[cur_node.nid] = cur_node
+                    cur_id = new_leaf_node.nid
                 else:
-                    cur_node.d1 = new_node_obj.nid
-                store.put_node(cur_node)
-                cur_id = new_node_obj.nid
-        else:
-            cur_id = nxt
+                    # 还没到底：建立新的内部节点作为过渡
+                    new_node_obj = Node(nid=None, up=cur_id, d0=None, d1=None)
+                    store.put_node(new_node_obj, commit=False)
+                    path_nodes[new_node_obj.nid] = new_node_obj
+                    if bit == 0:
+                        cur_node.d0 = new_node_obj.nid
+                    else:
+                        cur_node.d1 = new_node_obj.nid
+                    store.put_node(cur_node, commit=False)
+                    path_nodes[cur_node.nid] = cur_node
+                    cur_id = new_node_obj.nid
+            else:
+                cur_id = nxt
 
-    target_id = cur_id
+        target_id = cur_id
 
-    return {
-        "found": True,
-        "g": g,
-        "uppath": uppath,
-        "map": map_val,
-        "common_top": common_top_id,
-        "target": target_id,
-    }
+        return {
+            "found": True,
+            "g": g,
+            "uppath": uppath,
+            "map": map_val,
+            "common_top": common_top_id,
+            "target": target_id,
+        }
+    finally:
+        if _commit:
+            store.commit()
+
+
+def batch_query(store: Store1D, queries: list) -> list:
+    """批量一维查询。
+
+    queries: list of (node_id, d)
+    返回: list of result dict，顺序与 queries 一致。
+    内部所有查询共享一次事务提交，避免重复 fsync。
+    """
+    results = []
+    for node_id, d in queries:
+        results.append(query(store, node_id, d, _commit=False))
+    store.commit()
+    return results
