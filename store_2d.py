@@ -47,6 +47,13 @@ class Store2D:
                 id TEXT PRIMARY KEY
             )
         """)
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS id_counter (
+                name TEXT PRIMARY KEY,
+                next_id INTEGER NOT NULL
+            )
+        """)
+        c.execute("INSERT OR IGNORE INTO id_counter VALUES ('global', 0)")
         self.conn.commit()
 
     def _ensure_entry_leaf(self):
@@ -77,7 +84,20 @@ class Store2D:
         c.execute("INSERT INTO entry_leaf VALUES (?)", (_id_to_str(nid),))
         self.conn.commit()
 
+    def allocate_id(self) -> ID:
+        """原子递增分配一个全局唯一 ID，绝对不冲突。"""
+        c = self.conn.cursor()
+        c.execute("BEGIN IMMEDIATE")
+        c.execute("UPDATE id_counter SET next_id = next_id + 1 WHERE name = 'global'")
+        c.execute("SELECT next_id FROM id_counter WHERE name = 'global'")
+        new_id = c.fetchone()[0]
+        c.execute("COMMIT")
+        return new_id
+
+    # ---------- 节点表 ----------
     def put_node(self, node: Node):
+        if node.nid is None:
+            node.nid = self.allocate_id()
         c = self.conn.cursor()
         c.execute("INSERT OR REPLACE INTO nodes VALUES (?, ?)",
                   (_id_to_str(node.nid), pickle.dumps(node)))
@@ -91,7 +111,10 @@ class Store2D:
             return None
         return pickle.loads(row[0])
 
+    # ---------- 叶子表 ----------
     def put_leaf(self, leaf: Leaf):
+        if leaf.nid is None:
+            leaf.nid = self.allocate_id()
         c = self.conn.cursor()
         c.execute("INSERT OR REPLACE INTO leaves VALUES (?, ?)",
                   (_id_to_str(leaf.nid), pickle.dumps(leaf)))

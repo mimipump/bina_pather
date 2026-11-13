@@ -135,7 +135,7 @@ def query(store: Store1D, knowed_node_id: ID, d: int) -> Dict[str, Any]:
                 cur_id = new_leaf_node.nid
             else:
                 # 还没到底：建立新的内部节点作为过渡
-                new_node_obj = Node(nid=new_id(), up=cur_id, d0=None, d1=None)
+                new_node_obj = Node(nid=None, up=cur_id, d0=None, d1=None)
                 store.put_node(new_node_obj)
                 if bit == 0:
                     cur_node.d0 = new_node_obj.nid

@@ -51,8 +51,9 @@ def new_node(up: Optional[ID] = NULL,
              d4: Optional[ID] = NULL,
              d5: Optional[ID] = NULL,
              d6: Optional[ID] = NULL,
-             d7: Optional[ID] = NULL) -> Node:
-    return Node(nid=new_id(), up=up, d0=d0, d1=d1, d2=d2, d3=d3,
+             d7: Optional[ID] = NULL,
+             nid: Optional[ID] = NULL) -> Node:
+    return Node(nid=nid, up=up, d0=d0, d1=d1, d2=d2, d3=d3,
                 d4=d4, d5=d5, d6=d6, d7=d7)
 
 
@@ -60,8 +61,9 @@ def new_leaf(up: Optional[ID] = NULL,
              data: Optional[ID] = NULL,
              nbr1: Optional[ID] = NULL,
              nbr2: Optional[ID] = NULL,
-             nbr3: Optional[ID] = NULL) -> Leaf:
-    return Leaf(nid=new_id(), up=up, data=data,
+             nbr3: Optional[ID] = NULL,
+             nid: Optional[ID] = NULL) -> Leaf:
+    return Leaf(nid=nid, up=up, data=data,
                 nbr1=nbr1, nbr2=nbr2, nbr3=nbr3)
 
 

@@ -37,7 +37,6 @@ def build_tree(store, size=16, height=4):
                     gy = by * 2 + ly
                     li = leaf_idx(gx, gy, size)
                     leaf = leaves[li]
-                    leaf.up = p.nid
                     store.put_leaf(leaf)
                     slot = lx + 2 * ly
                     if slot == 0:
@@ -49,6 +48,13 @@ def build_tree(store, size=16, height=4):
                     else:
                         p.d3 = leaf.nid
             store.put_node(p)
+            for ly in range(2):
+                for lx in range(2):
+                    gx = bx * 2 + lx
+                    gy = by * 2 + ly
+                    li = leaf_idx(gx, gy, size)
+                    leaves[li].up = p.nid
+                    store.put_leaf(leaves[li])
             level1.append(p)
 
     # ---------- 层2~height-1：递归构建 -----------
@@ -60,14 +66,14 @@ def build_tree(store, size=16, height=4):
         for by2 in range(blocks_l):
             for bx2 in range(blocks_l):
                 p = new_node()
+                children = []
                 for lby in range(2):
                     for lbx in range(2):
                         gbx = bx2 * 2 + lbx
                         gby = by2 * 2 + lby
                         p_idx = gby * prev_blocks_per_dim + gbx
                         child = prev_level[p_idx]
-                        child.up = p.nid
-                        store.put_node(child)
+                        children.append(child)
                         slot = lbx + 2 * lby
                         if slot == 0:
                             p.d0 = child.nid
@@ -78,12 +84,16 @@ def build_tree(store, size=16, height=4):
                         else:
                             p.d3 = child.nid
                 store.put_node(p)
+                for child in children:
+                    child.up = p.nid
+                    store.put_node(child)
                 curr_level.append(p)
         prev_level = curr_level
         prev_blocks_per_dim = blocks_l
 
     # ---------- 根：挂 4 个顶层节点 -----------
     root = new_node()
+    store.put_node(root)
     for i, child in enumerate(prev_level):
         child.up = root.nid
         store.put_node(child)

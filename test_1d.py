@@ -26,9 +26,9 @@ def build_tree(store):
     l2_nodes = []
     for i in range(4):
         p = new_node(d0=leaves[2*i].nid, d1=leaves[2*i+1].nid)
+        store.put_node(p)
         leaves[2*i].up = p.nid
         leaves[2*i+1].up = p.nid
-        store.put_node(p)
         store.put_leaf(leaves[2*i])
         store.put_leaf(leaves[2*i+1])
         l2_nodes.append(p)
@@ -37,18 +37,18 @@ def build_tree(store):
     l3_nodes = []
     for i in range(2):
         p = new_node(d0=l2_nodes[2*i].nid, d1=l2_nodes[2*i+1].nid)
+        store.put_node(p)
         l2_nodes[2*i].up = p.nid
         l2_nodes[2*i+1].up = p.nid
-        store.put_node(p)
         store.put_node(l2_nodes[2*i])
         store.put_node(l2_nodes[2*i+1])
         l3_nodes.append(p)
 
     # 第 4 层：根
     root = new_node(d0=l3_nodes[0].nid, d1=l3_nodes[1].nid)
+    store.put_node(root)
     l3_nodes[0].up = root.nid
     l3_nodes[1].up = root.nid
-    store.put_node(root)
     store.put_node(l3_nodes[0])
     store.put_node(l3_nodes[1])
 

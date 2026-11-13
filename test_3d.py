@@ -34,6 +34,7 @@ def build_tree(store, size=16, height=4):
         for by in range(blocks_per_dim):
             for bz in range(blocks_per_dim):
                 p = new_node()
+                leaf_slots = []
                 for lx in range(2):
                     for ly in range(2):
                         for lz in range(2):
@@ -42,7 +43,6 @@ def build_tree(store, size=16, height=4):
                             gz = bz * 2 + lz
                             li = leaf_idx(gx, gy, gz, size)
                             leaf = leaves[li]
-                            leaf.up = p.nid
                             store.put_leaf(leaf)
                             slot = lx + 2 * ly + 4 * lz
                             if slot == 0:
@@ -61,7 +61,11 @@ def build_tree(store, size=16, height=4):
                                 p.d6 = leaf.nid
                             else:
                                 p.d7 = leaf.nid
+                            leaf_slots.append((leaf, slot))
                 store.put_node(p)
+                for leaf, slot in leaf_slots:
+                    leaf.up = p.nid
+                    store.put_leaf(leaf)
                 level1.append(p)
 
     # ---------- 层2~height-1：递归构建 -----------
@@ -74,6 +78,7 @@ def build_tree(store, size=16, height=4):
             for by2 in range(blocks_l):
                 for bz2 in range(blocks_l):
                     p = new_node()
+                    children = []
                     for lbx in range(2):
                         for lby in range(2):
                             for lbz in range(2):
@@ -84,8 +89,7 @@ def build_tree(store, size=16, height=4):
                                 bp2 = prev_blocks_per_dim * prev_blocks_per_dim
                                 p_idx = gbx * bp2 + gby * prev_blocks_per_dim + gbz
                                 child = prev_level[p_idx]
-                                child.up = p.nid
-                                store.put_node(child)
+                                children.append(child)
                                 slot = lbx + 2 * lby + 4 * lbz
                                 if slot == 0:
                                     p.d0 = child.nid
@@ -104,12 +108,16 @@ def build_tree(store, size=16, height=4):
                                 else:
                                     p.d7 = child.nid
                     store.put_node(p)
+                    for child in children:
+                        child.up = p.nid
+                        store.put_node(child)
                     curr_level.append(p)
         prev_level = curr_level
         prev_blocks_per_dim = blocks_l
 
     # ---------- 根：挂 8 个顶层节点 -----------
     root = new_node()
+    store.put_node(root)
     for i, child in enumerate(prev_level):
         child.up = root.nid
         store.put_node(child)

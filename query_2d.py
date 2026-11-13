@@ -8,14 +8,9 @@ def slot_of(parent: Node, child_id: ID) -> int:
     """返回 child 在 parent 中的口号（编号）：0~3。
     口号 = x + 2y，x 为最低位。
     """
-    if parent.d0 == child_id:
-        return 0
-    if parent.d1 == child_id:
-        return 1
-    if parent.d2 == child_id:
-        return 2
-    if parent.d3 == child_id:
-        return 3
+    slot_map = {parent.d0: 0, parent.d1: 1, parent.d2: 2, parent.d3: 3}
+    if child_id in slot_map:
+        return slot_map[child_id]
     raise ValueError(
         f"子节点 {child_id:#x} 不在父节点 {parent.nid:#x} 的任何口中，数据不一致"
     )
@@ -26,11 +21,8 @@ def deinterleave(uppath: int, g: int) -> tuple[int, int]:
     x = 0
     y = 0
     for i in range(g + 1):
-        slot = (uppath >> (2 * i)) & 3
-        x_bit = slot & 1
-        y_bit = (slot >> 1) & 1
-        x |= x_bit << i
-        y |= y_bit << i
+        x |= ((uppath >> (2 * i)) & 1) << i
+        y |= ((uppath >> (2 * i + 1)) & 1) << i
     return x, y
 
 
@@ -155,7 +147,7 @@ def query(store: Store2D, knowed_node_id: ID, dx: int, dy: int) -> Dict[str, Any
                 store.put_node(cur_node)
                 cur_id = new_leaf_node.nid
             else:
-                new_node_obj = Node(nid=new_id(), up=cur_id, d0=None, d1=None, d2=None, d3=None)
+                new_node_obj = Node(nid=None, up=cur_id, d0=None, d1=None, d2=None, d3=None)
                 store.put_node(new_node_obj)
                 children[slot] = new_node_obj.nid
                 cur_node.d0, cur_node.d1, cur_node.d2, cur_node.d3 = children
